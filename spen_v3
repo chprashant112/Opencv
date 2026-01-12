@@ -1,0 +1,293 @@
+import cv2
+import time
+import csv
+import threading
+import tkinter as tk
+from tkinter import filedialog, ttk
+from PIL import Image, ImageTk
+from ultralytics import YOLO
+import ttkbootstrap as tb
+from datetime import datetime
+import serial
+import serial.tools.list_ports
+import numpy as np
+
+# ---------------- CONFIG ----------------
+CSV_FILE = "pen_detection_log.csv"
+EXPECTED_ORIENTATION = "LEFT"  # Change to "RIGHT" if needed
+
+def write_csv_header():
+    with open(CSV_FILE, "w", newline="") as f:
+        csv.writer(f).writerow(["Timestamp", "Result", "Confidence", "Class", "Orientation"])
+
+class PenDetectionApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("S-Pen Detection — V3 (Orientation Integrated)")
+        self.style = tb.Style("cosmo")
+        self.root.geometry("1280x760")
+
+        # State
+        self.model = None
+        self.cap = None
+        self.running = False
+        self.ser = None
+        self.arduino = None
+        self.trigger_value = 0
+        self.last_trigger = 0
+        self.current_frame = None
+        
+        # Orientation State
+        self.template = None
+        self.detected_side = "-"
+        self.orientation_ok = False
+
+        self.conf_threshold = tk.DoubleVar(value=0.7)
+        self.baud_var = tk.IntVar(value=9600)
+
+        write_csv_header()
+        self._build_ui()
+        self.start_serial_reader()
+
+    # ---------------- UI ----------------
+    def _build_ui(self):
+        main_frame = ttk.Frame(self.root, padding=5)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        main_frame.columnconfigure(0, weight=7)
+        main_frame.columnconfigure(1, weight=3)
+        main_frame.rowconfigure(0, weight=1)
+
+        # Left: Video & Logs
+        left_frame = ttk.Frame(main_frame)
+        left_frame.grid(row=0, column=0, sticky="nsew")
+
+        self.video_label = ttk.Label(left_frame)
+        self.video_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.indicator = tk.Label(
+            left_frame, text="WAITING", font=("Segoe UI", 16, "bold"),
+            bg="gray", fg="white", relief="solid", bd=5, padx=10, pady=10
+        )
+        self.indicator.pack(pady=5)
+
+        # Log Table
+        cols = ("Time", "Result", "Class", "Conf", "Orient")
+        self.log_tree = ttk.Treeview(left_frame, columns=cols, show="headings", height=8)
+        for c in cols:
+            self.log_tree.heading(c, text=c)
+            self.log_tree.column(c, width=100, anchor="center")
+        self.log_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Right: Controls (Scrollable)
+        right_container = ttk.Frame(main_frame, padding=5)
+        right_container.grid(row=0, column=1, sticky="nsew")
+        
+        canvas = tk.Canvas(right_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(right_container, orient="vertical", command=canvas.yview)
+        self.scrollable_frame = ttk.Frame(canvas)
+
+        self.scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self._add_control_widgets()
+
+    def _add_control_widgets(self):
+        f = self.scrollable_frame
+        def quick_btn(txt, cmd, style="info"):
+            btn = ttk.Button(f, text=txt, command=cmd, bootstyle=style)
+            btn.pack(fill=tk.X, pady=2)
+            return btn
+
+        ttk.Label(f, text="AI Controls", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        quick_btn("📂 Load YOLO Model", self.load_model)
+        
+        self.camera_menu = ttk.Combobox(f, values=self.detect_cameras(), state="readonly")
+        self.camera_menu.set("Select Camera")
+        self.camera_menu.pack(fill=tk.X, pady=2)
+
+        ttk.Label(f, text="Confidence threshold:").pack(anchor="w")
+        ttk.Spinbox(f, from_=0.1, to=0.99, increment=0.05, textvariable=self.conf_threshold).pack(fill=tk.X)
+
+        quick_btn("▶ Start Camera", self.start_camera, "success")
+        quick_btn("■ Stop Camera", self.stop_camera, "danger")
+        quick_btn("🧭 Manual Trigger", self.manual_trigger, "warning")
+
+        ttk.Separator(f).pack(pady=10, fill=tk.X)
+
+        ttk.Label(f, text="Orientation Setup", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        quick_btn("✂ Crop Mic/USB Template", self.crop_template, "outline-info")
+        
+        self.template_lbl = ttk.Label(f, text="Template: Not Loaded", foreground="orange")
+        self.template_lbl.pack(anchor="w")
+        self.side_lbl = ttk.Label(f, text="Side Detected: -")
+        self.side_lbl.pack(anchor="w")
+        self.orient_lbl = ttk.Label(f, text="Orientation: -", font=("Segoe UI", 10, "bold"))
+        self.orient_lbl.pack(anchor="w")
+
+        ttk.Separator(f).pack(pady=10, fill=tk.X)
+
+        ttk.Label(f, text="Hardware Ports", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        
+        ttk.Label(f, text="Trigger Port (In):").pack(anchor="w")
+        self.port_menu = ttk.Combobox(f, values=ports)
+        self.port_menu.pack(fill=tk.X)
+        quick_btn("Connect Trigger", self.connect_serial, "outline-success")
+
+        ttk.Label(f, text="Arduino Port (Out):").pack(anchor="w")
+        self.arduino_port = ttk.Combobox(f, values=ports)
+        self.arduino_port.pack(fill=tk.X)
+        quick_btn("Connect Arduino", self.connect_arduino, "outline-success")
+
+    # ---------------- LOGIC ----------------
+    def detect_orientation(self, frame):
+        if self.template is None:
+            return True # If no template, we don't block the result
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        res = cv2.matchTemplate(gray, self.template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        
+        # Threshold to ensure we actually found the marker
+        if max_val < 0.5:
+            self.side_lbl.config(text="Marker not found")
+            return False
+
+        self.detected_side = "LEFT" if max_loc[0] < frame.shape[1]//2 else "RIGHT"
+        self.side_lbl.config(text=f"Detected: {self.detected_side} ({max_val:.2f})")
+        
+        self.orientation_ok = (self.detected_side == EXPECTED_ORIENTATION)
+        self.orient_lbl.config(
+            text=f"Orientation: {'OK' if self.orientation_ok else 'WRONG'}",
+            foreground="green" if self.orientation_ok else "red"
+        )
+        return self.orientation_ok
+
+    def run_inference(self, frame):
+        if not self.model: return "FAIL", 0, "No Model"
+        
+        results = self.model.predict(frame, verbose=False)
+        pen_found = False
+        best_conf = 0
+        best_name = "-"
+
+        for r in results:
+            for box in r.boxes:
+                conf = float(box.conf[0])
+                name = self.model.names[int(box.cls[0])].lower()
+                
+                if name in ["pen", "spen", "s-pen"] and conf >= self.conf_threshold.get():
+                    pen_found = True
+                    best_conf = conf
+                    best_name = name
+                    
+                    # Found the pen, now check orientation
+                    orient_ok = self.detect_orientation(frame)
+                    if orient_ok:
+                        return "PASS", best_conf, best_name
+                    else:
+                        return "FAIL", best_conf, f"{best_name} (Wrong Orient)"
+        
+        return "FAIL", 0.0, "-"
+
+    def camera_loop(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            if not ret: continue
+            self.current_frame = frame
+
+            # Handle Serial Trigger
+            if self.trigger_value == 1 and self.last_trigger == 0:
+                result, conf, cls = self.run_inference(frame)
+                self.process_result(result, conf, cls)
+                self.last_trigger = 1
+            elif self.trigger_value == 0:
+                self.last_trigger = 0
+
+            # UI Video Update
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = ImageTk.PhotoImage(Image.fromarray(cv2.resize(rgb, (640, 480))))
+            self.video_label.imgtk = img
+            self.video_label.config(image=img)
+            time.sleep(0.05)
+
+    def process_result(self, result, conf, cls):
+        self.update_indicator(result, "green" if result == "PASS" else "red")
+        self.log_detection(result, conf, cls)
+        self.send_to_arduino(result)
+        self.root.after(2000, lambda: self.update_indicator("WAITING", "gray"))
+
+    # ---------------- HELPERS ----------------
+    def crop_template(self):
+        if self.current_frame is None: return
+        roi = cv2.selectROI("Select Mic/USB Marker", self.current_frame)
+        cv2.destroyAllWindows()
+        if roi != (0,0,0,0):
+            x,y,w,h = roi
+            self.template = cv2.cvtColor(self.current_frame[y:y+h, x:x+w], cv2.COLOR_BGR2GRAY)
+            self.template_lbl.config(text="Template: Loaded ✅", foreground="green")
+
+    def load_model(self):
+        path = filedialog.askopenfilename(filetypes=[("YOLO", "*.pt")])
+        if path: self.model = YOLO(path)
+
+    def detect_cameras(self):
+        return [f"Camera {i}" for i in range(3) if cv2.VideoCapture(i).isOpened()]
+
+    def start_camera(self):
+        cam_idx = int(self.camera_menu.get().split()[-1]) if "Camera" in self.camera_menu.get() else 0
+        self.cap = cv2.VideoCapture(cam_idx)
+        self.running = True
+        threading.Thread(target=self.camera_loop, daemon=True).start()
+
+    def stop_camera(self):
+        self.running = False
+        if self.cap: self.cap.release()
+
+    def update_indicator(self, text, color):
+        self.indicator.config(text=text, bg=color)
+
+    def log_detection(self, result, conf, cls):
+        t = datetime.now().strftime("%H:%M:%S")
+        self.log_tree.insert("", 0, values=(t, result, cls, f"{conf:.2f}", self.detected_side))
+        with open(CSV_FILE, "a", newline="") as f:
+            csv.writer(f).writerow([t, result, conf, cls, self.detected_side])
+
+    def manual_trigger(self):
+        if self.current_frame is not None:
+            res, conf, cls = self.run_inference(self.current_frame)
+            self.process_result(res, conf, cls)
+
+    # ---------------- SERIAL ----------------
+    def connect_serial(self):
+        try: self.ser = serial.Serial(self.port_menu.get(), self.baud_var.get(), timeout=0.1)
+        except: pass
+
+    def start_serial_reader(self):
+        def reader():
+            while True:
+                if self.ser and self.ser.is_open:
+                    try:
+                        v = self.ser.readline().decode().strip()
+                        if v in ("0","1"): self.trigger_value = int(v)
+                    except: pass
+                time.sleep(0.05)
+        threading.Thread(target=reader, daemon=True).start()
+
+    def connect_arduino(self):
+        try: self.arduino = serial.Serial(self.arduino_port.get(), 9600, timeout=0.1)
+        except: pass
+
+    def send_to_arduino(self, msg):
+        if self.arduino and self.arduino.is_open:
+            self.arduino.write(("1\n" if msg=="PASS" else "0\n").encode())
+
+if __name__ == "__main__":
+    root = tb.Window(themename="cosmo")
+    app = PenDetectionApp(root)
+    root.mainloop()
