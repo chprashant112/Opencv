@@ -1,0 +1,61 @@
+    def _add_control_widgets(self):
+        f = self.scrollable_frame
+        
+        # 1. --- DEVICE SETTINGS GROUP ---
+        device_group = tb.LabelFrame(f, text=" Device & AI Settings ", padding=10)
+        device_group.pack(fill=tk.X, padx=5, pady=5)
+
+        tb.Label(device_group, text="YOLO Model:").grid(row=0, column=0, sticky="w", pady=2)
+        tb.Button(device_group, text="📂 Load .pt File", command=self.load_model, bootstyle="info-outline", width=15).grid(row=0, column=1, padx=5, pady=2)
+
+        tb.Label(device_group, text="Camera:").grid(row=1, column=0, sticky="w", pady=2)
+        self.camera_menu = tb.Combobox(device_group, values=self.detect_cameras(), state="readonly")
+        self.camera_menu.set("Select Camera")
+        self.camera_menu.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
+
+        tb.Label(device_group, text="Confidence:").grid(row=2, column=0, sticky="w", pady=2)
+        tb.Spinbox(device_group, from_=0.1, to=0.99, increment=0.05, textvariable=self.conf_threshold, width=10).grid(row=2, column=1, sticky="w", padx=5, pady=2)
+
+        # Action Buttons in a sub-row
+        btn_frame = tb.Frame(device_group)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=10, sticky="ew")
+        tb.Button(btn_frame, text="▶ Start", command=self.start_camera, bootstyle="success", width=10).pack(side="left", padx=2, expand=True, fill=tk.X)
+        tb.Button(btn_frame, text="■ Stop", command=self.stop_camera, bootstyle="danger", width=10).pack(side="left", padx=2, expand=True, fill=tk.X)
+        tb.Button(btn_frame, text="🧭 Trigger", command=self.manual_trigger, bootstyle="warning", width=10).pack(side="left", padx=2, expand=True, fill=tk.X)
+
+        # 2. --- ORIENTATION GROUP ---
+        orient_group = tb.LabelFrame(f, text=" Orientation Logic ", padding=10)
+        orient_group.pack(fill=tk.X, padx=5, pady=5)
+
+        tb.Button(orient_group, text="✂ Crop Marker (Mic/USB)", command=self.crop_template, bootstyle="secondary-outline").pack(fill=tk.X, pady=5)
+        
+        # Status labels in a cleaner format
+        status_inner = tb.Frame(orient_group)
+        status_inner.pack(fill=tk.X)
+        
+        self.template_lbl = tb.Label(status_inner, text="Template: Not Loaded", foreground="orange")
+        self.template_lbl.grid(row=0, column=0, sticky="w")
+        
+        self.side_lbl = tb.Label(status_inner, text="Side: -")
+        self.side_lbl.grid(row=1, column=0, sticky="w")
+        
+        self.orient_lbl = tb.Label(status_inner, text="Result: -", font=("Segoe UI", 10, "bold"))
+        self.orient_lbl.grid(row=2, column=0, sticky="w")
+
+        # 3. --- HARDWARE CONNECTIVITY GROUP ---
+        hw_group = tb.LabelFrame(f, text=" Hardware Ports ", padding=10)
+        hw_group.pack(fill=tk.X, padx=5, pady=5)
+
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        
+        # Trigger Serial
+        tb.Label(hw_group, text="Trigger In:").grid(row=0, column=0, sticky="w")
+        self.port_menu = tb.Combobox(hw_group, values=ports, width=15)
+        self.port_menu.grid(row=0, column=1, padx=5, pady=2)
+        tb.Button(hw_group, text="Link", command=self.connect_serial, bootstyle="outline-success", width=5).grid(row=0, column=2, padx=2)
+
+        # Arduino Serial
+        tb.Label(hw_group, text="Arduino Out:").grid(row=1, column=0, sticky="w")
+        self.arduino_port = tb.Combobox(hw_group, values=ports, width=15)
+        self.arduino_port.grid(row=1, column=1, padx=5, pady=2)
+        tb.Button(hw_group, text="Link", command=self.connect_arduino, bootstyle="outline-success", width=5).grid(row=1, column=2, padx=2)
