@@ -1,0 +1,53 @@
+import xml.etree.ElementTree as ET
+import csv
+from tkinter import Tk, filedialog, messagebox
+import os
+
+def convert_xml_to_csv(xml_path, csv_path):
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    rows = []
+    headers = set()
+
+    # Collect all rows and headers
+    for elem in root:
+        row_data = {}
+        for child in elem:
+            row_data[child.tag] = child.text
+            headers.add(child.tag)
+        rows.append(row_data)
+
+    headers = list(headers)
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+
+def main():
+    root = Tk()
+    root.withdraw()
+
+    xml_file = filedialog.askopenfilename(title="Select XML File", filetypes=[("XML Files","*.xml")])
+    if not xml_file:
+        messagebox.showinfo("Cancelled", "No file selected.")
+        return
+
+    save_path = filedialog.asksaveasfilename(
+        title="Save CSV As",
+        filetypes=[("CSV Files","*.csv")],
+        defaultextension=".csv"
+    )
+    if not save_path:
+        messagebox.showinfo("Cancelled", "No save location selected.")
+        return
+
+    try:
+        convert_xml_to_csv(xml_file, save_path)
+        messagebox.showinfo("Done", f"Converted to:\n{save_path}")
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+if __name__ == "__main__":
+    main()
