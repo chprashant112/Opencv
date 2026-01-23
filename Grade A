@@ -1,0 +1,55 @@
+import cv2
+import numpy as np
+from skimage.feature import local_binary_pattern
+
+def final_defect_detection_pipeline(image_path):
+    # 1. Load Image
+    img = cv2.imread(image_path)
+    if img is None:
+        print("Error: Image path is incorrect.")
+        return
+    
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # 2. Pre-processing: Denoising while keeping edges
+    # Bilateral filtering is better than Gaussian for defects because it preserves edges
+    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+
+    # 3. Feature 1: Canny Edges (Structural scratches)
+    edges = cv2.Canny(denoised, 50, 150)
+
+    # 4. Feature 2: Adaptive Thresholding (Identifying the mark)
+    # Binary_Inv makes the defect white and the phone background black
+    thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY_INV, 15, 4)
+
+    # 5. Feature 3: Texture Analysis (Local Binary Patterns)
+    # Radius 1, Points 8 for fine-grain surface analysis
+    lbp = local_binary_pattern(denoised, 8, 1, method="uniform")
+    lbp_norm = np.uint8((lbp / lbp.max()) * 255) # Normalize for display
+
+    # 6. Feature 4: Morphological Gradient (Highlights the boundary of the dent)
+    kernel = np.ones((3,3), np.uint8)
+    gradient = cv2.morphologyEx(denoised, cv2.MORPH_GRADIENT, kernel)
+
+    # 7. Visualization: Windowed Output
+    # Combine images for comparison
+    top_row = np.hstack([gray, edges, thresh])
+    bottom_row = np.hstack([lbp_norm, gradient, cv2.addWeighted(gray, 0.7, edges, 0.3, 0)])
+    
+    combined_view = np.vstack([top_row, bottom_row])
+    
+    # Resize for display if the image is too large for your screen
+    scale_percent = 50 
+    width = int(combined_view.shape[1] * scale_percent / 100)
+    height = int(combined_view.shape[0] * scale_percent / 100)
+    resized = cv2.resize(combined_view, (width, height))
+
+    cv2.imshow('Final Analysis (Gray | Edge | Thresh | Texture | Gradient | Overlay)', resized)
+    
+    print("Pipeline complete. Press any key to close the window.")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+# To use: final_defect_detection_pipeline('path_to_image.jpg')
