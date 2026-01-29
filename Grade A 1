@@ -1,0 +1,178 @@
+1.1 What Photometric Stereo REALLY Is (No Math Yet)
+Photometric stereo means:
+Same camera position, same object position, different light directions
+From how brightness changes when light direction changes, we infer:
+Surface orientation
+Micro-slopes
+Height variations (dents)
+⚠️ Camera never moves
+⚠️ Object never moves
+⚠️ ONLY light changes
+That’s why your black box + fixed geometry is mandatory.
+1.2 How Your Lighting Setup Fits PERFECTLY
+You already have:
+Blue raking light (LEFT)
+Warm raking light (RIGHT)
+Optional back or front raking (add later)
+Top white (NOT used for stereo)
+Capture Plan (MINIMUM)
+You need at least 3 lights for full 3D normals, but 2 lights are enough for dent detection.
+Recommended capture set:
+Image
+Light ON
+Light Direction
+I₁
+Blue only
+Left → Right
+I₂
+Warm only
+Right → Left
+I₃ (optional)
+Front low
+Bottom → Top
+1.3 Geometry (IMPORTANT)
+Let’s define axes:
+Z → Camera direction (up)
+X → Left–Right
+Y → Bottom–Top
+Each light has a known direction vector:
+Example:
+Blue light at 25° from surface:
+Copy code
+
+L₁ = (cos25°, 0, sin25°)
+Warm light at 15°:
+Copy code
+
+L₂ = (-cos15°, 0, sin15°)
+📌 You don’t need exact perfection — approximate angles are enough.
+1.4 What the Camera Sees
+At each pixel:
+Flat surface → similar brightness in all images
+Dent → brightness changes drastically
+Scratch → specular spike in one image
+Photometric stereo turns brightness change into geometry.
+2️⃣ Mathematical Extraction of DENTS from SHADOWS
+Now the math — but I’ll keep it intuitive and usable.
+2.1 Image Formation Model (Simplified)
+For each pixel:
+Copy code
+
+I = ρ · (L · N)
+Where:
+I = pixel intensity
+ρ (rho) = surface reflectance (assumed constant locally)
+L = light direction vector
+N = surface normal vector
+2.2 With Multiple Lights
+You capture:
+Copy code
+
+I₁ = ρ · (L₁ · N)
+I₂ = ρ · (L₂ · N)
+I₃ = ρ · (L₃ · N)
+Matrix form:
+Copy code
+
+[I₁]   [L₁x L₁y L₁z]   [ρNx]
+[I₂] = [L₂x L₂y L₂z] · [ρNy]
+[I₃]   [L₃x L₃y L₃z]   [ρNz]
+Solve for N using least squares.
+2.3 What a DENT Does Mathematically
+A dent:
+Changes surface normal
+Causes local slope
+Alters dot product with light
+So:
+One side of dent gets brighter
+Opposite side gets darker
+This asymmetry is your dent signal.
+2.4 Converting Normals → Height (Depth)
+Normals give you:
+Copy code
+
+Nx = ∂Z/∂X
+Ny = ∂Z/∂Y
+So depth Z(x,y) is recovered by integration:
+Copy code
+
+Z(x,y) = ∬ (Nx, Ny)
+In practice:
+Use Poisson integration
+Or simple cumulative sum for dents
+📌 You don’t need full 3D — dent detection works with slope maps alone.
+2.5 Ultra-Simple Dent Detection (No Full Stereo)
+If you want a minimal solution:
+Copy code
+
+DENT_MAP = |I_left - I_right|
+Why this works:
+Flat area → similar brightness
+Dent → one side bright, other dark
+This is shockingly effective for sub-mm dents.
+3️⃣ How Many PIXELS Do You Need for 0.1 mm?
+This is where most people get confused.
+3.1 The BIG TRUTH
+You do NOT need:
+“One pixel per defect size”
+You need:
+Multiple pixels across the SHADOW GRADIENT
+3.2 Practical Rule (Industry)
+To reliably detect a feature of size d:
+Copy code
+
+Pixel size ≤ d / 5
+So for:
+d = 0.1 mm
+Required pixel size ≈ 0.02 mm (20 microns)
+3.3 What This Means for Camera Resolution
+Example:
+Phone width ≈ 70 mm
+Required resolution across width:
+Copy code
+
+70 mm / 0.02 mm = 3500 pixels
+So:
+4K width (3840 px) is enough
+12 MP camera is sufficient IF:
+You zoom / crop
+You don’t capture full phone at once
+📌 Industry NEVER captures full object in one shot for micro defects.
+3.4 Sensor + Lens Reality Check
+Resolution depends on:
+Sensor pixel size
+Lens sharpness
+Working distance
+Example:
+IMX477 (1.55 µm pixel)
+Macro lens
+FOV = 50 mm
+Effective resolution:
+Copy code
+
+50 mm / 4000 px ≈ 0.0125 mm per pixel
+That’s enough for 0.1 mm dents.
+3.5 Lighting vs Resolution (IMPORTANT)
+Bad lighting + 50 MP = ❌ FAIL
+Good lighting + 8 MP = ✅ SUCCESS
+Because:
+Lighting creates contrast
+Camera only samples contrast
+HOW ALL 3 CONNECT (THIS IS KEY)
+Component
+Role
+Photometric stereo
+Converts light variation → geometry
+Shadow math
+Converts brightness → slope
+Pixel density
+Samples slope accurately
+If any one fails, system fails.
+FINAL INDUSTRY-LEVEL SUMMARY
+Sub-millimeter defect detection is not a resolution problem — it is a controlled-light, slope-amplification problem solved using photometric stereo.
+What I recommend next (logical order):
+1️⃣ Exact numeric example (with real pixel values)
+2️⃣ OpenCV code for left-right shadow dent map
+3️⃣ How CNNs consume photometric stereo outputs
+4️⃣ Tolerance limits: smallest dent you can detect
+Tell me which one you want — we’ll go even deeper.
